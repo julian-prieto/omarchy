@@ -652,7 +652,9 @@ Item {
             detail: "= " + calcExpr.trim(),
             path: "",
             childCount: 0,
-            action: "wl-copy " + Util.shellQuote(calcText),
+            // -- keeps a negative result from reading as an option: wl-copy
+            // '-2' fails outright while wl-copy -- '-2' copies it.
+            action: "wl-copy -- " + Util.shellQuote(calcText),
             provider: "",
             score: 0,
             section: ""

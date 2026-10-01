@@ -559,8 +559,12 @@ function calcEvaluate(expr) {
     skip()
     var start = pos
     while (pos < src.length && /[0-9.]/.test(src.charAt(pos))) pos += 1
-    if (start === pos) throw new Error("expected a number")
-    var num = parseFloat(src.slice(start, pos))
+    var token = src.slice(start, pos)
+    // parseFloat would happily read the 1.2 prefix of 1.2.3, making a
+    // mistyped expression look like a valid calculation, so the token has
+    // to be a well-formed number on its own.
+    if (!/^(\d+(\.\d*)?|\.\d+)$/.test(token)) throw new Error("malformed number")
+    var num = parseFloat(token)
     if (isNaN(num)) throw new Error("expected a number")
     return num
   }
@@ -577,11 +581,12 @@ function calcEvaluate(expr) {
 
 // 0.1+0.2 must read 0.3, not 0.30000000000000004: round through 12
 // significant digits and drop the padding zeros. Values too large or small
-// for that precision switch to exponent notation instead.
+// for that precision switch to exponent notation, also at 12 significant
+// digits.
 function calcFormat(value) {
   if (value === null || value === undefined || !isFinite(value)) return ""
   var abs = Math.abs(value)
-  if (abs !== 0 && (abs < 1e-9 || abs >= 1e15)) return String(parseFloat(value.toExponential(6)))
+  if (abs !== 0 && (abs < 1e-9 || abs >= 1e15)) return String(parseFloat(value.toExponential(11)))
   return String(parseFloat(value.toPrecision(12)))
 }
 
