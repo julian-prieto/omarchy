@@ -61,8 +61,10 @@ pass "menu calculator answers =-prefixed queries"
 # ---------------------------------------------------------------- runtime pass
 #
 # The node pass covers the evaluator; this one drives the whole path — summon,
-# type, Enter, clipboard — against a throwaway quickshell instance running the
-# checkout's own shell, the way screenshot-sanity-test.sh does.
+# type, Enter, action — against a throwaway quickshell instance running the
+# checkout's own shell, the way screenshot-sanity-test.sh does. wl-copy is a
+# stub that records its arguments, so the test never touches the session
+# clipboard and still sees exactly what the row would have copied.
 
 require_compositor "menu calculator runtime test"
 
@@ -74,14 +76,8 @@ if ! command -v wtype >/dev/null 2>&1; then
   skip "wtype not installed; skipping menu calculator runtime test"
   exit 0
 fi
-if pgrep -x omasnap >/dev/null 2>&1; then
-  skip "omasnap is already running; skipping menu calculator runtime test"
-  exit 0
-fi
 
 require_command jq
-require_command wl-copy
-require_command wl-paste
 
 TMPDIR=$(mktemp -d)
 QS_PID=""
@@ -100,23 +96,38 @@ trap cleanup EXIT
 
 test_root="$TMPDIR/omarchy"
 test_home="$TMPDIR/home"
+stub_bin="$TMPDIR/bin"
 log="$TMPDIR/quickshell.log"
-mkdir -p "$test_root" "$test_home"
+wl_copy_out="$TMPDIR/wl-copy-out"
+mkdir -p "$test_root" "$test_home" "$stub_bin"
 cp -a "$ROOT/shell" "$test_root/shell"
 ln -s "$ROOT/config" "$test_root/config"
 ln -s "$ROOT/bin" "$test_root/bin"
 ln -s "$ROOT/default" "$test_root/default"
 
+cat >"$stub_bin/wl-copy" <<SH
+#!/bin/bash
+printf '%s\\n' "\$@" >"\$WL_COPY_OUT"
+SH
+chmod +x "$stub_bin/wl-copy"
+
+# Actions run through bash -l, whose startup files may rebuild PATH from
+# scratch; the test home puts the stub back in front, whatever the host
+# profile does.
+printf 'export PATH="%s:\$PATH"\n' "$stub_bin" >"$test_home/.bash_profile"
+
 shell_ipc() {
   OMARCHY_PATH="$test_root" "$ROOT/bin/omarchy-shell" "$@"
 }
 
+WL_COPY_OUT="$wl_copy_out" \
 OMARCHY_PATH="$test_root" \
 HOME="$test_home" \
 XDG_CONFIG_HOME="$test_home/.config" \
 XDG_CACHE_HOME="$test_home/.cache" \
 XDG_STATE_HOME="$test_home/.local/state" \
-  quickshell -p "$test_root/shell" --no-color >"$log" 2>&1 &
+PATH="$stub_bin:$PATH" \
+  quickshell -p "$test_root/shell" --no-color </dev/null >"$log" 2>&1 &
 QS_PID=$!
 
 for _ in {1..80}; do
@@ -130,26 +141,28 @@ for _ in {1..80}; do
   sleep 0.1
 done
 
-# Best-effort clipboard save: the calculator copies plain text, so only the
-# text content can be preserved and restored.
-saved_clipboard=$(wl-paste -n 2>/dev/null || true)
+# IPC answers before the bar and its layer surfaces finish coming up, and the
+# menu only takes keyboard focus once they have; give the shell a beat to
+# settle before summoning.
+sleep 1.5
 
 shell_ipc -q shell summon omarchy.menu '{"menu":"root"}' >/dev/null
-sleep 1
+sleep 1.5
 wtype "=6*7"
-sleep 0.5
+sleep 1
 wtype -k Return
-sleep 0.5
+sleep 1
 
 copied=""
 for _ in {1..20}; do
-  copied=$(wl-paste -n 2>/dev/null || true)
-  [[ $copied == "42" ]] && break
+  if [[ -f $wl_copy_out ]]; then
+    copied=$(<"$wl_copy_out")
+    break
+  fi
   sleep 0.2
 done
 
 shell_ipc -q shell hide omarchy.menu >/dev/null 2>&1 || true
-[[ -n $saved_clipboard ]] && wl-copy -n -- "$saved_clipboard" 2>/dev/null || true
 
-[[ $copied == "42" ]] || fail "menu calculator copies the result to the clipboard: got '$copied'"
-pass "menu calculator copies the result to the clipboard"
+[[ $copied == $'--\n42' ]] || fail "menu calculator copies the result through wl-copy: got '$copied'"
+pass "menu calculator copies the result through wl-copy"
